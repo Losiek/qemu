@@ -190,6 +190,9 @@ config SIFIVE_U_PRCI
 config VIRT_CTRL
     bool
 
+config VIRT_FOO
+    bool
+
 config LASI
     bool
 

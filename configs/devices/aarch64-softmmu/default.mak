@@ -8,3 +8,6 @@ include ../arm-softmmu/default.mak
 # CONFIG_XLNX_ZYNQMP_ARM=n
 # CONFIG_XLNX_VERSAL=n
 # CONFIG_SBSA_REF=n
+
+# My virt foo device
+CONFIG_VIRT_FOO=y
