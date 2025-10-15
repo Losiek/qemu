@@ -1,11 +1,16 @@
-/* Virtula Foo Device */
+/* Virtual Foo Device with message queues*/
 #include "qemu/osdep.h"
+
+#include <mqueue.h>
+
 #include "hw/hw.h"
 #include "hw/irq.h"
 #include "hw/sysbus.h"
 #include "qemu/bitops.h"
 #include "qemu/log.h"
 #include "qom/object.h"
+#include "qapi/error.h"
+
 
 #define VIRT_FOO_DEBUG
 #ifdef VIRT_FOO_DEBUG
@@ -17,6 +22,12 @@
 #define TYPE_VIRT_FOO   "virt-foo"
 // OBJECT_DECLARE_SIMPLE_TYPE(VirtFooState, VIRT_FOO)
 #define VIRT_FOO(obj)   OBJECT_CHECK(VirtFooState, (obj), TYPE_VIRT_FOO)
+
+#define VIRT_FOO_REQ_Q_NAME "/virt_foo_req_mq"
+#define VIRT_FOO_RESP_Q_NAME "/virt_foo_resp_mq"
+#define VIRT_FOO_IRQ_Q_NAME "/virt_foo_irq_mq"
+
+#define VIRT_FOO_NO_DATA 0
 
 // Register map
 #define REG_ID          0x0
@@ -31,57 +42,72 @@
 #define INT_ENABLED     BIT(0)
 #define INT_BUFFER_DEQ  BIT(1)
 
-
 typedef struct {
     SysBusDevice parent_obj;
+
     MemoryRegion iomem;
     qemu_irq irq;
-    uint32_t id;
-    uint32_t init;
-    uint32_t cmd;
-    uint32_t status;
+    struct mq_attr req_queue_attr, resp_queue_attr, irq_queue_attr;
+    mqd_t req_queue, resp_queue, irq_queue;
 } VirtFooState;
 
-static void virt_foo_set_irq(VirtFooState *s, int irq)
-{
-    DPRINTF("Set IRQ 0x%x\n", irq);
+typedef enum {FOO_READ, FOO_WRITE} virt_foo_op;
 
-    s->status = irq;
-    qemu_set_irq(s->irq, 1);
-}
+typedef struct {
+    hwaddr addr;
+    uint64_t data;
+    virt_foo_op op;
+} virt_foo_req;
 
-static void virt_foo_clear_irq(VirtFooState *s)
-{
-    DPRINTF("Clear IRQ\n");
-    qemu_set_irq(s->irq, 0);
-}
+typedef struct {
+    uint64_t data;
+    int error;
+} virt_foo_resp;
+
+typedef struct {
+    int error;
+} virt_foo_irq;
+
+// static void virt_foo_set_irq(VirtFooState *s, int irq)
+// {
+//     DPRINTF("Set IRQ 0x%x\n", irq);
+//     qemu_set_irq(s->irq, 1);
+// }
+
+// static void virt_foo_clear_irq(VirtFooState *s)
+// {
+//     DPRINTF("Clear IRQ\n");
+//     qemu_set_irq(s->irq, 0);
+// }
 
 static uint64_t virt_foo_read(void *opaque, hwaddr offset, unsigned size)
 {
     DPRINTF("Read from offset 0x%lx\n", offset);
 
     VirtFooState *s = (VirtFooState *)opaque;
-    bool is_enabled = s->init & CHIP_EN;
 
-    if (!is_enabled) {
-        fprintf(stderr, "[virt-foo] Device is disabled\n");
-        return 0;
+    // Create a message
+    virt_foo_req req = { .addr = offset, .data = VIRT_FOO_NO_DATA, .op = FOO_READ };
+    // Send message
+    if (mq_send(s->req_queue, (char *)&req, sizeof(virt_foo_req), 0) == -1) {
+        DPRINTF("Cannot send the request message\n");
+        // TODO: Some error handling
+    }
+    // Wait for message in response
+    virt_foo_resp resp;
+    ssize_t bytes = mq_receive(s->resp_queue, (char *)&resp, sizeof(virt_foo_resp), NULL);
+    if (bytes < 0) {
+        DPRINTF("Cannot send the request message\n");
+        // TODO: Some error handling
     }
 
-    switch (offset) {
-    case REG_ID:
-        return s->id;
-    case REG_INIT:
-        return s->init;
-    case REG_CMD:
-        return s->cmd;
-    case REG_INIT_STATUS:
-        virt_foo_clear_irq(s);
-        return s->status;
-    default:
-        break;
+    // Check if response is valid
+    if (resp.error == 0) {
+        return resp.data;
     }
 
+    DPRINTF("Got error in response: %d\n", resp.error);
+    // TODO: Some error handling
     return 0;
 }
 
@@ -91,18 +117,24 @@ static void virt_foo_write(void *opaque, hwaddr offset, uint64_t value, unsigned
 
     VirtFooState *s = (VirtFooState *)opaque;
 
-    switch (offset) {
-    case REG_INIT:
-        s->init = (uint32_t)value;
-        if (value)
-            virt_foo_set_irq(s, INT_ENABLED);
-        break;
-    case REG_CMD:
-        s->cmd = (uint32_t)value;
-        virt_foo_set_irq(s, INT_BUFFER_DEQ);
-        break;
-    default:
-        break;
+    // Create a message
+    virt_foo_req req = { .addr = offset, .data = value, .op = FOO_WRITE };
+    // Send message
+    if (mq_send(s->req_queue, (char *)&req, sizeof(virt_foo_req), 0) == -1) {
+        DPRINTF("Cannot send the request message\n");
+        // TODO: Some error handling
+    }
+    // Wait for message in response
+    virt_foo_resp resp;
+    ssize_t bytes = mq_receive(s->resp_queue, (char *)&resp, sizeof(virt_foo_resp), NULL);
+    if (bytes < 0) {
+        DPRINTF("Cannot send the request message\n");
+        // TODO: Some error handling
+    }
+
+    // Check if response is valid
+    if (resp.error) {
+        DPRINTF("Got error in response: %d\n", resp.error);
     }
 }
 
@@ -111,6 +143,42 @@ static const MemoryRegionOps virt_foo_ops = {
     .write = virt_foo_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
+
+static void virt_foo_create_mqs(VirtFooState *s, Error **errp)
+{
+    // Configure request message queue
+    s->req_queue_attr.mq_maxmsg = 1;
+    s->req_queue_attr.mq_msgsize = sizeof(virt_foo_req);
+    s->req_queue_attr.mq_flags = 0;
+    s->req_queue_attr.mq_curmsgs = 0;
+    // Open request message queue
+    s->req_queue = mq_open(VIRT_FOO_REQ_Q_NAME, O_CREAT|O_WRONLY, S_IRWXU, &s->req_queue_attr);
+    if (s->req_queue == (mqd_t)-1) {
+        error_setg(errp, "virt-foo: Could not open the %s message queue", VIRT_FOO_REQ_Q_NAME);
+    }
+
+    // Configure response message queue
+    s->resp_queue_attr.mq_maxmsg = 1;
+    s->resp_queue_attr.mq_msgsize = sizeof(virt_foo_resp);
+    s->resp_queue_attr.mq_flags = 0;
+    s->resp_queue_attr.mq_curmsgs = 0;
+    // Open response message queue
+    s->resp_queue = mq_open(VIRT_FOO_RESP_Q_NAME, O_CREAT|O_RDONLY, S_IRWXU, &s->resp_queue_attr);
+    if (s->resp_queue == (mqd_t)-1) {
+        error_setg(errp, "virt-foo: Could not open the %s message queue", VIRT_FOO_RESP_Q_NAME);
+    }
+
+    // Configure irq message queue
+    s->irq_queue_attr.mq_maxmsg = 1;
+    s->irq_queue_attr.mq_msgsize = sizeof(virt_foo_irq);
+    s->irq_queue_attr.mq_flags = 0;
+    s->irq_queue_attr.mq_curmsgs = 0;
+    // Open irq message queue
+    s->irq_queue = mq_open(VIRT_FOO_IRQ_Q_NAME, O_CREAT|O_RDONLY, S_IRWXU, &s->irq_queue_attr);
+    if (s->irq_queue == (mqd_t)-1) {
+        error_setg(errp, "virt-foo: Could not open the %s message queue", VIRT_FOO_IRQ_Q_NAME);
+    }
+}
 
 static void virt_foo_realize(DeviceState *d, Error **errp)
 {
@@ -121,15 +189,32 @@ static void virt_foo_realize(DeviceState *d, Error **errp)
     sysbus_init_mmio(sbd, &s->iomem);
     // Single interrupt line
     sysbus_init_irq(sbd, &s->irq);
+    // Create queues
+    virt_foo_create_mqs(s, errp);
 
-    s->id = CHIP_ID;
-    s->init = 0;
+}
+
+static void virt_foo_unrealize(DeviceState *d)
+{
+    // Clean-up
+    VirtFooState *s = VIRT_FOO(d);
+    // SysBusDevice *sbd = SYS_BUS_DEVICE(d);
+
+    mq_close(s->req_queue);
+    mq_unlink(VIRT_FOO_REQ_Q_NAME);
+
+    mq_close(s->resp_queue);
+    mq_unlink(VIRT_FOO_RESP_Q_NAME);
+
+    mq_close(s->irq_queue);
+    mq_unlink(VIRT_FOO_IRQ_Q_NAME);
 }
 
 static void virt_foo_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = virt_foo_realize;
+    dc->unrealize = virt_foo_unrealize;
 }
 
 static const TypeInfo virt_foo_info = {
