@@ -10,6 +10,8 @@
 #include "qemu/log.h"
 #include "qom/object.h"
 #include "qapi/error.h"
+#include "qemu/thread.h"
+#include "qemu/main-loop.h"
 
 
 #define VIRT_FOO_DEBUG
@@ -30,17 +32,7 @@
 #define VIRT_FOO_NO_DATA 0
 
 // Register map
-#define REG_ID          0x0
-#define CHIP_ID         0xf001
-
-#define REG_INIT        0x4
-#define CHIP_EN         BIT(0)
-
-#define REG_CMD         0x8
-
-#define REG_INIT_STATUS 0xc
-#define INT_ENABLED     BIT(0)
-#define INT_BUFFER_DEQ  BIT(1)
+#define IRQ_CLR          0x10
 
 typedef struct {
     SysBusDevice parent_obj;
@@ -49,6 +41,7 @@ typedef struct {
     qemu_irq irq;
     struct mq_attr req_queue_attr, resp_queue_attr, irq_queue_attr;
     mqd_t req_queue, resp_queue, irq_queue;
+    QemuThread irq_thread;
 } VirtFooState;
 
 typedef enum {FOO_READ, FOO_WRITE} virt_foo_op;
@@ -68,23 +61,31 @@ typedef struct {
     int error;
 } virt_foo_irq;
 
-// static void virt_foo_set_irq(VirtFooState *s, int irq)
-// {
-//     DPRINTF("Set IRQ 0x%x\n", irq);
-//     qemu_set_irq(s->irq, 1);
-// }
 
-// static void virt_foo_clear_irq(VirtFooState *s)
-// {
-//     DPRINTF("Clear IRQ\n");
-//     qemu_set_irq(s->irq, 0);
-// }
+static void virt_foo_set_irq(void *opaque)
+{
+    DPRINTF("Set IRQ\n");
+    VirtFooState *s = (VirtFooState *)opaque;
+    qemu_set_irq(s->irq, 1);
+}
+
+static void virt_foo_clear_irq(void *opaque)
+{
+    DPRINTF("Clear IRQ\n");
+    VirtFooState *s = (VirtFooState *)opaque;
+    qemu_set_irq(s->irq, 0);
+}
 
 static uint64_t virt_foo_read(void *opaque, hwaddr offset, unsigned size)
 {
     DPRINTF("Read from offset 0x%lx\n", offset);
 
     VirtFooState *s = (VirtFooState *)opaque;
+
+    // TODO: For test only
+    if (offset == IRQ_CLR) {
+        virt_foo_clear_irq(s);
+    }
 
     // Create a message
     virt_foo_req req = { .addr = offset, .data = VIRT_FOO_NO_DATA, .op = FOO_READ };
@@ -180,6 +181,24 @@ static void virt_foo_create_mqs(VirtFooState *s, Error **errp)
     }
 }
 
+static void *irq_thread(void *opaque)
+{
+    VirtFooState *s = opaque;
+    virt_foo_irq irq;
+
+    while (1) {
+        ssize_t bytes = mq_receive(s->irq_queue, (char *)&irq, sizeof(virt_foo_irq), NULL);
+        if (bytes < 0) {
+            DPRINTF("Cannot receive the irq message\n");
+            // TODO: Some error handling
+        } else {
+            // Schedule IRQ for raising
+            aio_bh_schedule_oneshot(qemu_get_aio_context(), virt_foo_set_irq, s);
+        }
+    }
+    return NULL;
+}
+
 static void virt_foo_realize(DeviceState *d, Error **errp)
 {
     VirtFooState *s = VIRT_FOO(d);
@@ -191,7 +210,8 @@ static void virt_foo_realize(DeviceState *d, Error **errp)
     sysbus_init_irq(sbd, &s->irq);
     // Create queues
     virt_foo_create_mqs(s, errp);
-
+    // Create an IRQ thread
+    qemu_thread_create(&s->irq_thread, "irq_thread", irq_thread, s, QEMU_THREAD_DETACHED);
 }
 
 static void virt_foo_unrealize(DeviceState *d)
@@ -208,6 +228,8 @@ static void virt_foo_unrealize(DeviceState *d)
 
     mq_close(s->irq_queue);
     mq_unlink(VIRT_FOO_IRQ_Q_NAME);
+
+    // TODO: Kill the irq_thread
 }
 
 static void virt_foo_class_init(ObjectClass *klass, void *data)
