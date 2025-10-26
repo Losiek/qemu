@@ -143,8 +143,10 @@ static void virt_foo_create_mqs(VirtFooState *s, Error **errp)
     s->req_queue_attr.mq_msgsize = sizeof(virt_foo_req);
     s->req_queue_attr.mq_flags = 0;
     s->req_queue_attr.mq_curmsgs = 0;
+    // First, remove the queue
+    mq_unlink(VIRT_FOO_REQ_Q_NAME);
     // Open request message queue
-    s->req_queue = mq_open(VIRT_FOO_REQ_Q_NAME, O_CREAT|O_WRONLY, S_IRWXU, &s->req_queue_attr);
+    s->req_queue = mq_open(VIRT_FOO_REQ_Q_NAME, O_CREAT|O_EXCL|O_WRONLY, S_IRWXU, &s->req_queue_attr);
     if (s->req_queue == (mqd_t)-1) {
         error_setg(errp, "virt-foo: Could not open the %s message queue", VIRT_FOO_REQ_Q_NAME);
     }
@@ -154,8 +156,10 @@ static void virt_foo_create_mqs(VirtFooState *s, Error **errp)
     s->resp_queue_attr.mq_msgsize = sizeof(virt_foo_resp);
     s->resp_queue_attr.mq_flags = 0;
     s->resp_queue_attr.mq_curmsgs = 0;
+    // First, remove the queue
+    mq_unlink(VIRT_FOO_RESP_Q_NAME);
     // Open response message queue
-    s->resp_queue = mq_open(VIRT_FOO_RESP_Q_NAME, O_CREAT|O_RDONLY, S_IRWXU, &s->resp_queue_attr);
+    s->resp_queue = mq_open(VIRT_FOO_RESP_Q_NAME, O_CREAT|O_EXCL|O_RDONLY, S_IRWXU, &s->resp_queue_attr);
     if (s->resp_queue == (mqd_t)-1) {
         error_setg(errp, "virt-foo: Could not open the %s message queue", VIRT_FOO_RESP_Q_NAME);
     }
@@ -165,8 +169,10 @@ static void virt_foo_create_mqs(VirtFooState *s, Error **errp)
     s->irq_queue_attr.mq_msgsize = sizeof(virt_foo_irq);
     s->irq_queue_attr.mq_flags = 0;
     s->irq_queue_attr.mq_curmsgs = 0;
+    // First, remove the queue
+    mq_unlink(VIRT_FOO_IRQ_Q_NAME);
     // Open irq message queue
-    s->irq_queue = mq_open(VIRT_FOO_IRQ_Q_NAME, O_CREAT|O_RDONLY, S_IRWXU, &s->irq_queue_attr);
+    s->irq_queue = mq_open(VIRT_FOO_IRQ_Q_NAME, O_CREAT|O_EXCL|O_RDONLY, S_IRWXU, &s->irq_queue_attr);
     if (s->irq_queue == (mqd_t)-1) {
         error_setg(errp, "virt-foo: Could not open the %s message queue", VIRT_FOO_IRQ_Q_NAME);
     }
