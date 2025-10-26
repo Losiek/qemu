@@ -39,6 +39,7 @@ typedef struct {
 
     MemoryRegion iomem;
     qemu_irq irq;
+    uint32_t irq_status;
     struct mq_attr req_queue_attr, resp_queue_attr, irq_queue_attr;
     mqd_t req_queue, resp_queue, irq_queue;
     QemuThread irq_thread;
@@ -49,6 +50,7 @@ typedef enum {FOO_READ, FOO_WRITE} virt_foo_op;
 typedef struct {
     hwaddr addr;
     uint64_t data;
+    uint32_t size;
     virt_foo_op op;
 } virt_foo_req;
 
@@ -78,7 +80,7 @@ static void virt_foo_clear_irq(void *opaque)
 
 static uint64_t virt_foo_read(void *opaque, hwaddr offset, unsigned size)
 {
-    DPRINTF("Read from offset 0x%lx\n", offset);
+    DPRINTF("Read from offset 0x%lx of size %d\n", offset, size);
 
     VirtFooState *s = (VirtFooState *)opaque;
 
@@ -88,7 +90,7 @@ static uint64_t virt_foo_read(void *opaque, hwaddr offset, unsigned size)
     }
 
     // Create a message
-    virt_foo_req req = { .addr = offset, .data = VIRT_FOO_NO_DATA, .op = FOO_READ };
+    virt_foo_req req = { .addr = offset, .data = VIRT_FOO_NO_DATA, .size = size, .op = FOO_READ };
     // Send message
     if (mq_send(s->req_queue, (char *)&req, sizeof(virt_foo_req), 0) == -1) {
         DPRINTF("Cannot send the request message\n");
@@ -119,7 +121,7 @@ static void virt_foo_write(void *opaque, hwaddr offset, uint64_t value, unsigned
     VirtFooState *s = (VirtFooState *)opaque;
 
     // Create a message
-    virt_foo_req req = { .addr = offset, .data = value, .op = FOO_WRITE };
+    virt_foo_req req = { .addr = offset, .data = value, .size = size, .op = FOO_WRITE };
     // Send message
     if (mq_send(s->req_queue, (char *)&req, sizeof(virt_foo_req), 0) == -1) {
         DPRINTF("Cannot send the request message\n");
