@@ -60,22 +60,16 @@ typedef struct {
 } virt_foo_resp;
 
 typedef struct {
+    uint32_t data;
     int error;
 } virt_foo_irq;
 
 
-static void virt_foo_set_irq(void *opaque)
+static void virt_foo_set_irq_status(void *opaque)
 {
-    DPRINTF("Set IRQ\n");
     VirtFooState *s = (VirtFooState *)opaque;
-    qemu_set_irq(s->irq, 1);
-}
-
-static void virt_foo_clear_irq(void *opaque)
-{
-    DPRINTF("Clear IRQ\n");
-    VirtFooState *s = (VirtFooState *)opaque;
-    qemu_set_irq(s->irq, 0);
+    DPRINTF("Set IRQ: %d\n", s->irq_status);
+    qemu_set_irq(s->irq, s->irq_status);
 }
 
 static uint64_t virt_foo_read(void *opaque, hwaddr offset, unsigned size)
@@ -83,11 +77,6 @@ static uint64_t virt_foo_read(void *opaque, hwaddr offset, unsigned size)
     DPRINTF("Read from offset 0x%lx of size %d\n", offset, size);
 
     VirtFooState *s = (VirtFooState *)opaque;
-
-    // TODO: For test only
-    if (offset == IRQ_CLR) {
-        virt_foo_clear_irq(s);
-    }
 
     // Create a message
     virt_foo_req req = { .addr = offset, .data = VIRT_FOO_NO_DATA, .size = size, .op = FOO_READ };
@@ -194,8 +183,10 @@ static void *irq_thread(void *opaque)
             DPRINTF("Cannot receive the irq message\n");
             // TODO: Some error handling
         } else {
+            // Get new IRQ status from the message (should I lock it?)
+            s->irq_status = irq.data;
             // Schedule IRQ for raising
-            aio_bh_schedule_oneshot(qemu_get_aio_context(), virt_foo_set_irq, s);
+            aio_bh_schedule_oneshot(qemu_get_aio_context(), virt_foo_set_irq_status, s);
         }
     }
     return NULL;
