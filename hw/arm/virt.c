@@ -184,7 +184,7 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* Adding Foo device */
-    [VIRT_FOO] =                { 0x0b000000, 0x00000200 },
+    [VIRT_HW_COSIM_MMIO] =      { 0x0b000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
     [VIRT_SECURE_MEM] =         { 0x0e000000, 0x01000000 },
@@ -231,7 +231,7 @@ static const int a15irqmap[] = {
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
     /* Add Foo device interrupt */
-    [VIRT_FOO] = 112 + PLATFORM_BUS_NUM_IRQS,
+    [VIRT_HW_COSIM_MMIO] = 112 + PLATFORM_BUS_NUM_IRQS,
 };
 
 static void create_randomness(MachineState *ms, const char *node)
@@ -1190,33 +1190,33 @@ static void create_virtio_devices(const VirtMachineState *vms)
     }
 }
 
-static void create_virt_foo_device(const VirtMachineState *vms)
+static void create_virt_hw_cosim_mmio_device(const VirtMachineState *vms)
 {
-    hwaddr base = vms->memmap[VIRT_FOO].base;
-    hwaddr size = vms->memmap[VIRT_FOO].size;
-    int irq = vms->irqmap[VIRT_FOO];
+    hwaddr base = vms->memmap[VIRT_HW_COSIM_MMIO].base;
+    hwaddr size = vms->memmap[VIRT_HW_COSIM_MMIO].size;
+    int irq = vms->irqmap[VIRT_HW_COSIM_MMIO];
     char *nodename;
     MachineState *ms = MACHINE(vms);
 
-    // DeviceState *dev = qdev_new("virt-foo");
+    // DeviceState *dev = qdev_new("virt-hw-cosim-mmio");
     // SysBusDevice *s = SYS_BUS_DEVICE(dev);
 
     /*
      * virt-foo@0b000000 {
-     *      compatible = "virt-foo";
+     *      compatible = "virt-hw-cosim-mmio";
      *      reg = <0x0b000000 0x200>;
      *      interrupt-parent = <&gic>;
      *      interrupts = <176>;
      * }
      */
 
-    sysbus_create_simple("virt-foo", base, qdev_get_gpio_in(vms->gic, irq));
+    sysbus_create_simple("virt-hw-cosim-mmio", base, qdev_get_gpio_in(vms->gic, irq));
     // sysbus_realize_and_unref(s, &error_fatal);
     // sysbus_connect_irq(s, 0, qdev_get_gpio_in(vms->gic, irq));
 
-    nodename = g_strdup_printf("/virt_foo@%" PRIx64, base);
+    nodename = g_strdup_printf("/virt-hw-cosim-mmio@%" PRIx64, base);
     qemu_fdt_add_subnode(ms->fdt, nodename);
-    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible", "virt-foo");
+    qemu_fdt_setprop_string(ms->fdt, nodename, "compatible", "virt-hw-cosim-mmio");
     qemu_fdt_setprop_sized_cells(ms->fdt, nodename, "reg", 2, base, 2, size);
     // qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupt-parent", vms->gic_phandle);
     qemu_fdt_setprop_cells(ms->fdt, nodename, "interrupts",
@@ -2462,8 +2462,8 @@ static void machvirt_init(MachineState *machine)
      * no backend is created the transport will just sit harmlessly idle.
      */
     create_virtio_devices(vms);
-    /* Create virtual foo device */
-    create_virt_foo_device(vms);
+    /* Create virtual hw cosim mmio device */
+    create_virt_hw_cosim_mmio_device(vms);
 
     vms->fw_cfg = create_fw_cfg(vms, &address_space_memory);
     rom_set_fw(vms->fw_cfg);

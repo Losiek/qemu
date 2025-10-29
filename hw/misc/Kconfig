@@ -190,7 +190,7 @@ config SIFIVE_U_PRCI
 config VIRT_CTRL
     bool
 
-config VIRT_FOO
+config VIRT_HW_COSIM_MMIO
     bool
 
 config LASI

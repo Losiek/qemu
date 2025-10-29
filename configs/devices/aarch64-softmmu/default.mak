@@ -10,4 +10,4 @@ include ../arm-softmmu/default.mak
 # CONFIG_SBSA_REF=n
 
 # My virt foo device
-CONFIG_VIRT_FOO=y
+CONFIG_VIRT_HW_COSIM_MMIO=y
