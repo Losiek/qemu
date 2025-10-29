@@ -38,6 +38,8 @@ typedef struct {
     SysBusDevice parent_obj;
 
     MemoryRegion iomem;
+    QemuMutex lock;
+
     qemu_irq irq;
     uint32_t irq_status;
     struct mq_attr req_queue_attr, resp_queue_attr, irq_queue_attr;
@@ -204,11 +206,13 @@ static void *irq_thread(void *opaque) {
             DPRINTF("Cannot receive the irq message\n");
             // TODO: Some error handling
         } else {
-            // Get new IRQ status from the message (should I lock it?)
+            // Get new IRQ status from the message
+            qemu_mutex_lock(&s->lock);
             s->irq_status = irq.data;
             // Schedule IRQ for raising
             aio_bh_schedule_oneshot(qemu_get_aio_context(),
                                     virt_hw_cosim_mmio_set_irq_status, s);
+            qemu_mutex_unlock(&s->lock);
         }
     }
     return NULL;
