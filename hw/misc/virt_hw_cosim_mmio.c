@@ -1,4 +1,5 @@
-/* Virtual Hardware Cosimulation with Memory Mapped IO Device with message queues*/
+/* Virtual Hardware Cosimulation with Memory Mapped IO Device with message
+ * queues*/
 #include "qemu/osdep.h"
 
 #include <mqueue.h>
@@ -23,6 +24,9 @@ do {                                                                         \
 } while (0)
 #endif
 
+#define LOG_ERR(fmt, ...)                                                      \
+qemu_log_mask(LOG_GUEST_ERROR, "[virt_hw_cosim_mmio] " fmt, ##__VA_ARGS__)
+
 #define TYPE_VIRT_HW_COSIM_MMIO "virt-hw-cosim-mmio"
 // OBJECT_DECLARE_SIMPLE_TYPE(VirtHwCosimMmioState, VIRT_HW_COSIM_MMIO)
 #define VIRT_HW_COSIM_MMIO(obj)                                                \
@@ -36,6 +40,9 @@ OBJECT_CHECK(VirtHwCosimMmioState, (obj), TYPE_VIRT_HW_COSIM_MMIO)
 
 #define VIRT_HW_COSIM_MMIO_MIN_ACCESS_SIZE 8
 #define VIRT_HW_COSIM_MMIO_MAX_ACCESS_SIZE 8
+#define VIRT_HW_COSIM_MMIO_UNALIGNED false
+#define VIRT_HW_COSIM_MMIO_DECODE_ERROR -1
+#define VIRT_HW_COSIM_MMIO_ACCESS_ERROR -2
 
 typedef struct {
     SysBusDevice parent_obj;
@@ -75,8 +82,23 @@ static void virt_hw_cosim_mmio_set_irq_status(void *opaque) {
     qemu_set_irq(s->irq, s->irq_status);
 }
 
-static uint64_t virt_hw_cosim_mmio_read(void *opaque, hwaddr offset,
-                                        unsigned size) {
+static MemTxResult handle_response_error(int error, hwaddr addr) {
+    switch (error) {
+        case VIRT_HW_COSIM_MMIO_DECODE_ERROR:
+            LOG_ERR("Nothing at the address 0x%lx\n", addr);
+            return MEMTX_DECODE_ERROR;
+        case VIRT_HW_COSIM_MMIO_ACCESS_ERROR:
+            LOG_ERR("Access denied at the address 0x%lx\n", addr);
+            return MEMTX_ACCESS_ERROR;
+        default:
+            LOG_ERR("Unknown error: %d at the address 0x%lx\n", error, addr);
+            return MEMTX_ERROR;
+    }
+}
+
+static MemTxResult
+virt_hw_cosim_mmio_read_with_attrs(void *opaque, hwaddr offset, uint64_t *data,
+                                   unsigned size, MemTxAttrs attrs) {
     DPRINTF("Read from offset 0x%lx of size %d\n", offset, size);
 
     VirtHwCosimMmioState *s = (VirtHwCosimMmioState *)opaque;
@@ -89,30 +111,30 @@ static uint64_t virt_hw_cosim_mmio_read(void *opaque, hwaddr offset,
     // Send message
     if (mq_send(s->req_queue, (char *)&req, sizeof(virt_hw_cosim_mmio_req), 0) ==
         -1) {
-        DPRINTF("Cannot send the request message\n");
-        // TODO: Some error handling
+        LOG_ERR("Cannot send the request message\n");
+        return MEMTX_ERROR;
     }
     // Wait for message in response
     virt_hw_cosim_mmio_resp resp;
     ssize_t bytes = mq_receive(s->resp_queue, (char *)&resp,
                                sizeof(virt_hw_cosim_mmio_resp), NULL);
     if (bytes < 0) {
-        DPRINTF("Cannot send the request message\n");
-        // TODO: Some error handling
+        LOG_ERR("Cannot receive the resposnse message\n");
+        return MEMTX_ERROR;
     }
 
     // Check if response is valid
     if (resp.error == 0) {
-        return resp.data;
+        *data = resp.data;
+        return MEMTX_OK;
+    } else {
+        return handle_response_error(resp.error, offset);
     }
-
-    DPRINTF("Got error in response: %d\n", resp.error);
-    // TODO: Some error handling
-    return 0;
 }
 
-static void virt_hw_cosim_mmio_write(void *opaque, hwaddr offset,
-                                     uint64_t value, unsigned size) {
+static MemTxResult
+virt_hw_cosim_mmio_write_with_attrs(void *opaque, hwaddr offset, uint64_t value,
+                                    unsigned size, MemTxAttrs attrs) {
     DPRINTF("Write 0x%lx to offset 0x%lx\n", value, offset);
 
     VirtHwCosimMmioState *s = (VirtHwCosimMmioState *)opaque;
@@ -123,31 +145,35 @@ static void virt_hw_cosim_mmio_write(void *opaque, hwaddr offset,
     // Send message
     if (mq_send(s->req_queue, (char *)&req, sizeof(virt_hw_cosim_mmio_req), 0) ==
         -1) {
-        DPRINTF("Cannot send the request message\n");
-        // TODO: Some error handling
+        LOG_ERR("Cannot send the request message\n");
+        return MEMTX_ERROR;
     }
     // Wait for message in response
     virt_hw_cosim_mmio_resp resp;
     ssize_t bytes = mq_receive(s->resp_queue, (char *)&resp,
                                sizeof(virt_hw_cosim_mmio_resp), NULL);
     if (bytes < 0) {
-        DPRINTF("Cannot send the request message\n");
-        // TODO: Some error handling
+        LOG_ERR("Cannot send the request message\n");
+        return MEMTX_ERROR;
     }
 
     // Check if response is valid
-    if (resp.error) {
-        DPRINTF("Got error in response: %d\n", resp.error);
+    if (resp.error == 0) {
+        return MEMTX_OK;
+    } else {
+        return handle_response_error(resp.error, offset);
     }
 }
 
 static const MemoryRegionOps virt_hw_cosim_mmio_ops = {
-    .read = virt_hw_cosim_mmio_read,
-    .write = virt_hw_cosim_mmio_write,
+    .read_with_attrs = virt_hw_cosim_mmio_read_with_attrs,
+    .write_with_attrs = virt_hw_cosim_mmio_write_with_attrs,
     .endianness = DEVICE_NATIVE_ENDIAN,
-    .valid = {
+    .valid =
+    {
         .min_access_size = VIRT_HW_COSIM_MMIO_MIN_ACCESS_SIZE,
         .max_access_size = VIRT_HW_COSIM_MMIO_MAX_ACCESS_SIZE,
+        .unaligned = VIRT_HW_COSIM_MMIO_UNALIGNED,
     },
 };
 
