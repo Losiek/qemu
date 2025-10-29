@@ -34,6 +34,9 @@ OBJECT_CHECK(VirtHwCosimMmioState, (obj), TYPE_VIRT_HW_COSIM_MMIO)
 
 #define VIRT_HW_COSIM_MMIO_NO_DATA 0
 
+#define VIRT_HW_COSIM_MMIO_MIN_ACCESS_SIZE 8
+#define VIRT_HW_COSIM_MMIO_MAX_ACCESS_SIZE 8
+
 typedef struct {
     SysBusDevice parent_obj;
 
@@ -142,6 +145,10 @@ static const MemoryRegionOps virt_hw_cosim_mmio_ops = {
     .read = virt_hw_cosim_mmio_read,
     .write = virt_hw_cosim_mmio_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = {
+        .min_access_size = VIRT_HW_COSIM_MMIO_MIN_ACCESS_SIZE,
+        .max_access_size = VIRT_HW_COSIM_MMIO_MAX_ACCESS_SIZE,
+    },
 };
 
 static void virt_hw_cosim_mmio_create_mqs(VirtHwCosimMmioState *s,
