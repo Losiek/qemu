@@ -183,7 +183,7 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
-    /* Adding Foo device */
+    /* Adding HW Cosim MMIO device */
     [VIRT_HW_COSIM_MMIO] =      { 0x0b000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -1202,7 +1202,7 @@ static void create_virt_hw_cosim_mmio_device(const VirtMachineState *vms)
     // SysBusDevice *s = SYS_BUS_DEVICE(dev);
 
     /*
-     * virt-foo@0b000000 {
+     * virt-hw-cosim-mmio@0b000000 {
      *      compatible = "virt-hw-cosim-mmio";
      *      reg = <0x0b000000 0x200>;
      *      interrupt-parent = <&gic>;
@@ -1210,7 +1210,12 @@ static void create_virt_hw_cosim_mmio_device(const VirtMachineState *vms)
      * }
      */
 
-    sysbus_create_simple("virt-hw-cosim-mmio", base, qdev_get_gpio_in(vms->gic, irq));
+    DeviceState *dev = sysbus_create_simple("virt-hw-cosim-mmio", base, qdev_get_gpio_in(vms->gic, irq));
+    if (!dev) {
+        fprintf(stderr, "Failed to create virt-hw-cosim-mmio!\n");
+    } else {
+        fprintf(stderr, "virt-hw-cosim-mmio! created successfully\n");
+    }
     // sysbus_realize_and_unref(s, &error_fatal);
     // sysbus_connect_irq(s, 0, qdev_get_gpio_in(vms->gic, irq));
 
