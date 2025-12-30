@@ -230,7 +230,7 @@ static const int a15irqmap[] = {
     [VIRT_GIC_V2M] = 48, /* ...to 48 + NUM_GICV2M_SPIS - 1 */
     [VIRT_SMMU] = 74,    /* ...to 74 + NUM_SMMU_IRQS - 1 */
     [VIRT_PLATFORM_BUS] = 112, /* ...to 112 + PLATFORM_BUS_NUM_IRQS -1 */
-    /* Add Foo device interrupt */
+    /* Add HW_COSIM_MMIO device interrupt */
     [VIRT_HW_COSIM_MMIO] = 112 + PLATFORM_BUS_NUM_IRQS,
 };
 

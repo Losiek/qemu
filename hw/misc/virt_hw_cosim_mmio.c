@@ -33,7 +33,6 @@
     qemu_log_mask(LOG_GUEST_ERROR, "[virt_hw_cosim_mmio] " fmt, ##__VA_ARGS__)
 
 #define TYPE_VIRT_HW_COSIM_MMIO "virt-hw-cosim-mmio"
-// OBJECT_DECLARE_SIMPLE_TYPE(VirtHwCosimMmioState, VIRT_HW_COSIM_MMIO)
 
 #define VIRT_HW_COSIM_MMIO(obj)                                                \
     OBJECT_CHECK(VirtHwCosimMmioState, (obj), TYPE_VIRT_HW_COSIM_MMIO)
@@ -96,8 +95,6 @@ typedef struct {
     QemuMutex lock;
     QemuCond cond;
 
-    QEMUBH *bh;
-
     state state_m;
 
     struct mq_attr req_queue_attr;
@@ -129,33 +126,6 @@ typedef struct {
     uint64_t control_m;
 } VirtHwCosimMmioState;
 
-// Bottom half: runs in main loop
-static void virt_hw_cosim_mmio_bh_cb(void *opaque) {
-    // VirtHwCosimMmioState *s = (VirtHwCosimMmioState *)opaque;
-
-    // qemu_mutex_lock(&s->lock);
-    // if (s->resp_pending == 1) {
-    //     DPRINTF("[BH] Got response. Data: 0x%lx, error: %u\n", s->resp_m.data, s->resp_m.error);
-    //     // Unpack the response to the registers
-    //     s->rdata_m = s->resp_m.data;
-    //     s->errcode_m = s->resp_m.error;
-    // }
-    // qemu_mutex_unlock(&s->lock);
-}
-
-// static MemTxResult handle_response_error(int error, hwaddr addr) {
-//     switch (error) {
-//         case VIRT_HW_COSIM_MMIO_DECODE_ERROR:
-//             LOG_ERR("Nothing at the address 0x%lx\n", addr);
-//             return MEMTX_DECODE_ERROR;
-//         case VIRT_HW_COSIM_MMIO_ACCESS_ERROR:
-//             LOG_ERR("Access denied at the address 0x%lx\n", addr);
-//             return MEMTX_ACCESS_ERROR;
-//         default:
-//             LOG_ERR("Unknown error: %d at the address 0x%lx\n", error, addr);
-//             return MEMTX_ERROR;
-//     }
-// }
 
 static void *virt_hw_cosim_mmio_io_thread(void *opaque) {
     DPRINTF("Starting IO thread\n");
@@ -207,12 +177,9 @@ static void *virt_hw_cosim_mmio_io_thread(void *opaque) {
         s->rdata_m = s->resp_m.data;
         s->errcode_m = s->resp_m.error;
         qemu_mutex_unlock(&s->lock);
-error:
-        // Notify main loop
-        qemu_bh_schedule(s->bh);
     }
-    qemu_mutex_unlock(&s->lock);
 
+error:
     return NULL;
 }
 
@@ -249,13 +216,10 @@ static inline uint64_t mask_read_value(hwaddr offset, uint64_t data,
 static MemTxResult
 virt_hw_cosim_mmio_read_with_attrs(void *opaque, hwaddr offset, uint64_t *data,
         unsigned size, MemTxAttrs attrs) {
+    // Left for debug
     // DPRINTF("Read from offset 0x%lx of size %d\n", offset, size);
 
     VirtHwCosimMmioState *s = (VirtHwCosimMmioState *)opaque;
-
-    if (size != 8)
-        qemu_log_mask(LOG_UNIMP, "[virt_hw_cosim_mmio] unexpected read size %u\n",
-                size);
 
     hwaddr word_offset = (hwaddr)(offset / 8) * 8;
 
@@ -336,10 +300,6 @@ virt_hw_cosim_mmio_write_with_attrs(void *opaque, hwaddr offset, uint64_t value,
 
     VirtHwCosimMmioState *s = (VirtHwCosimMmioState *)opaque;
 
-    if (size != 8)
-        qemu_log_mask(LOG_UNIMP, "[virt_hw_cosim_mmio] unexpected write size %u\n",
-                size);
-
     qemu_mutex_lock(&s->lock);
     MemTxResult rval = MEMTX_OK;
 
@@ -376,10 +336,12 @@ virt_hw_cosim_mmio_write_with_attrs(void *opaque, hwaddr offset, uint64_t value,
                     data = s->wdata_m;
                 }
                 // Create a message
-                virt_hw_cosim_mmio_req req = {.addr = s->addr_m,
+                virt_hw_cosim_mmio_req req = {
+                    .addr = s->addr_m,
                     .data = data,
-                    .size = VIRT_HW_COSIM_MMIO_ACCESS_SIZE,
-                    .op = op};
+                    .size = size,
+                    .op = op
+                };
 
                 s->req_m = req;
                 s->req_pending = true;
@@ -477,6 +439,7 @@ static void *virt_hw_cosim_mmio_irq_thread(void *opaque) {
     VirtHwCosimMmioState *s = opaque;
     virt_hw_cosim_mmio_irq irq;
 
+    DPRINTF("Starting IRQ thread\n");
     while (true) {
         ssize_t bytes = mq_receive(s->irq_queue, (char *)&irq,
                 sizeof(virt_hw_cosim_mmio_irq), NULL);
@@ -509,8 +472,6 @@ static void virt_hw_cosim_mmio_realize(DeviceState *d, Error **errp) {
     qemu_mutex_init(&s->lock);
     // Initialize condition
     qemu_cond_init(&s->cond);
-    // Add bottom halfs callback
-    s->bh = qemu_bh_new(virt_hw_cosim_mmio_bh_cb, s);
     // Single interrupt line
     sysbus_init_irq(sbd, &s->irq);
     // Create queues
@@ -544,12 +505,20 @@ static void virt_hw_cosim_mmio_unrealize(DeviceState *d) {
     // TODO: Kill the irq_thread
 }
 
+static void virt_hw_cosim_mmio_reset(DeviceState *d) {
+    VirtHwCosimMmioState *s = VIRT_HW_COSIM_MMIO(d);
+    DPRINTF("Reset\n");
+    // Ensure IRQ is de-asserted on reset
+    qemu_set_irq(s->irq, 0);
+}
+
 static void virt_hw_cosim_mmio_class_init(ObjectClass *klass, void *data) {
     qemu_log_mask(LOG_UNIMP, "virt_hw_cosim_mmio class initialized!\n");
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = virt_hw_cosim_mmio_realize;
     dc->unrealize = virt_hw_cosim_mmio_unrealize;
+    dc->legacy_reset = virt_hw_cosim_mmio_reset;
 }
 
 static const TypeInfo virt_hw_cosim_mmio_info = {

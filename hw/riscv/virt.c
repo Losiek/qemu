@@ -76,6 +76,8 @@ static const MemMapEntry virt_memmap[] = {
     [VIRT_CLINT] =        {  0x2000000,       0x10000 },
     [VIRT_ACLINT_SSWI] =  {  0x2F00000,        0x4000 },
     [VIRT_PCIE_PIO] =     {  0x3000000,       0x10000 },
+    /* Adding HW Cosim MMIO device */
+    [VIRT_HW_COSIM_MMIO] = { 0x3F00000, 0x200 },
     [VIRT_PLATFORM_BUS] = {  0x4000000,     0x2000000 },
     [VIRT_PLIC] =         {  0xc000000, VIRT_PLIC_SIZE(VIRT_CPUS_MAX * 2) },
     [VIRT_APLIC_M] =      {  0xc000000, APLIC_SIZE(VIRT_CPUS_MAX) },
@@ -1057,6 +1059,22 @@ static void create_fdt_iommu(RISCVVirtState *s, uint16_t bdf)
                            bdf + 1, iommu_phandle, bdf + 1, 0xffff - bdf);
 }
 
+static void create_fdt_hw_cosim_mmio(RISCVVirtState *s, const MemMapEntry *memmap,
+                           uint32_t irq_mmio_phandle)
+{
+    g_autofree char *name = NULL;
+    MachineState *ms = MACHINE(s);
+
+    name = g_strdup_printf("/virt-hw-cosim-mmio@%lx", (long)memmap[VIRT_HW_COSIM_MMIO].base);
+    qemu_fdt_add_subnode(ms->fdt, name);
+    qemu_fdt_setprop_string(ms->fdt, name, "compatible", "virt-hw-cosim-mmio");
+    qemu_fdt_setprop_cells(ms->fdt, name, "reg",
+        0x0, memmap[VIRT_HW_COSIM_MMIO].base, 0x0, memmap[VIRT_HW_COSIM_MMIO].size);
+    qemu_fdt_setprop_cell(ms->fdt, name, "interrupt-parent",
+        irq_mmio_phandle);
+    qemu_fdt_setprop_cells(ms->fdt, name, "interrupts", VIRT_HW_COSIM_MMIO_IRQ, 0x1);
+}
+
 static void finalize_fdt(RISCVVirtState *s)
 {
     uint32_t phandle = 1, irq_mmio_phandle = 1, msi_pcie_phandle = 1;
@@ -1075,6 +1093,8 @@ static void finalize_fdt(RISCVVirtState *s)
     create_fdt_uart(s, virt_memmap, irq_mmio_phandle);
 
     create_fdt_rtc(s, virt_memmap, irq_mmio_phandle);
+
+    create_fdt_hw_cosim_mmio(s, virt_memmap, irq_mmio_phandle);
 }
 
 static void create_fdt(RISCVVirtState *s, const MemMapEntry *memmap)
@@ -1638,6 +1658,10 @@ static void virt_machine_init(MachineState *machine)
                                   drive_get(IF_PFLASH, 0, i));
     }
     virt_flash_map(s, system_memory);
+
+    /* Create virtual hw cosim mmio device */
+    sysbus_create_simple("virt-hw-cosim-mmio", memmap[VIRT_HW_COSIM_MMIO].base,
+        qdev_get_gpio_in(mmio_irqchip, VIRT_HW_COSIM_MMIO_IRQ));
 
     /* load/create device tree */
     if (machine->dtb) {
