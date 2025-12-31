@@ -382,6 +382,11 @@ static const MemoryRegionOps virt_hw_cosim_mmio_ops = {
         .max_access_size = VIRT_HW_COSIM_MMIO_MAX_ACCESS_SIZE,
         .unaligned = VIRT_HW_COSIM_MMIO_UNALIGNED,
     },
+    .impl =
+    {
+        .min_access_size = VIRT_HW_COSIM_MMIO_MIN_ACCESS_SIZE,
+        .max_access_size = VIRT_HW_COSIM_MMIO_MAX_ACCESS_SIZE,
+    },
 };
 
 static void virt_hw_cosim_mmio_create_mqs(VirtHwCosimMmioState *s,
